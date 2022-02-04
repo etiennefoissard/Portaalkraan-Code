@@ -2,39 +2,30 @@
  */
 
 #include <avr/io.h>
-#include <avr/delay.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <util/delay.h>
 #include <avr/interrupt.h>
 
-// Afstandssensor
-#define TRIGGER_x         PB7     // digital 9
-#define ECHO_x_z          PD0     // digital 21
-#define TRIGGER_z         PB5
-#define TRIG_HOOG_x       PORTH |= (1 << TRIGGER_x)
-#define TRIG_LAAG_x       PORTH &= ~(1 << TRIGGER_x)
-#define ECHO_HOOG_x_z     PIND &(1 << ECHO_x_z)
-#define TRIG_HOOG_z       PORTB |= (1 << TRIGGER_z)
-#define TRIG_LAAG_z       PORTB &= ~(1 <<TRIGGER_z)
-
-
-// Motor pins
-#define MOTOR_X      PH6
-#define MOTOR_X2     PH3
-#define MOTOR_Y      PE3
-#define MOTOR_Y2     PG5
-#define MOTOR_Z      PH5
-#define MOTOR_Z2     PH4
-
 // Eindstopjes
-#define EIND_X     PF1         // rechts, voor
-#define EIND_2X     PF2         // rechts, achter
+#define EIND_X      PF1         // voor
+#define EIND_2X     PF2         // achter
 #define EIND_Z      PF3         // links
 #define EIND_2Z     PF4         // rechts
+#define EIND_2Y     PF5         // boven
+#define EIND_Y      PF6         // onder
+
+
+// IR sensoren
+#define IRSENSOR1   PF0
+#define IRSENSOR2   PK0
+#define IRSENSOR3   PK2
+#define IRSENSOR4   PK3
+#define IRSENSOR5   PK4
+#define IRSENSOR6   PK5
+#define IRSENSOR7   PK6
+#define IRSENSOR8   PK7
 
 // Knoppen
-#define KNOP        PF7
-#define KNOP2       PK0
+#define STARTKNOP   PF7
 
 // Noodstop
 #define NOODSTOP    PK1
@@ -58,69 +49,19 @@ void initTimer1(void)
 {
     // Timer 1 (16 bit) is de systeemtimer (overflow)
     TCCR1A = 0;
-    // 16000000 Hz / 1 / 256 = 62500 Hz
-    // start timer 0, prescaler = 1
+    // 16000000 Hz / 1 / 65536 = 244.14 Hz
+    // start timer 1, prescaler = 1
     // 1 tick = 1 / 16000000 sec
-    TCCR1B = TCCR1B | (1 << CS10);
-    // enable timer 0 voor overflow interrupt flag
+    TCCR1B = TCCR1B | (1 << CS10) | (1 << CS11);
+    // enable timer 1 voor overflow interrupt flag
     TIMSK1 = TIMSK1 | (1 << TOIE1);
 }
 
-void init_sensor()
-{
-    DDRH |= (1 << TRIGGER_x);
-    DDRD &= ~(1 << ECHO_x_z);
-    DDRB |= (1 << TRIGGER_z);
-    DDRB &= ~(1 << ECHO_z);
-
-    EIMSK |= (1 << INT0);
-    EICRA |= (1 << ISC00);
-    sei();
-
-    // timer 1, 16 bits (2^16), mode 0
-    TCCR1A = 0;
-
-    // 16000000 Hz / 1 / 65536 = 244.141 Hz     , 1 tick = 1 / 16000000 sec
-    // 16000000 Hz / 8 / 65536 = 30.518 Hz      , 1 tick = 8 / 16000000 sec
-    // 16000000 Hz / 64 / 65536 = 3.815 Hz      , 1 tick = 64 / 16000000 sec
-    // 16000000 Hz / 256 / 65536 = 0.954 Hz     , 1 tick = 256 / 16000000 sec
-    // 16000000 Hz / 1024 / 65536 = 0.238 Hz    , 1 tick = 1024 / 16000000 sec
-
-    // start timer 1, prescaler = 1
-    TCCR1B |= (0 << CS12) | (0 << CS11) | (1 << CS10);
-
-}
-
-volatile int teller=0;
-// Interrupt voor noodstop
+// Interrupt voor end switches
 ISR(TIMER0_OVF_vect)
 {
-    int noodstop = !(PINK &(1 << NOODSTOP));
-    if(teller == 488)
-    {
-        if(noodstop)
-        {
-            // elektromagneet aan
-            PORTE |= (1 << ELEKTROMAGNEET);
-            // alle motoren uit
-            PORTH &= ~(1 << PH6);
-            PORTF &= ~(1 << PH3);
-            PORTH &= ~(1 << PH5);
-            PORTF &= ~(1 << PH4);
-            PORTH &= ~(1 << PE3);
-            PORTF &= ~(1 << PG5);
-        }
-        teller = 0;
-    }
-    else
-    {
-        teller++;
-    }
-}
 
-ISR(TIMER1_OVF_vect)
-{
-    // Eindstoppen
+    //Eindstoppen
     int stop_z = !(PINF &(1 << EIND_Z));
     int stop_2z = !(PINF &(1 << EIND_2Z));
     int stop_x = !(PINF &(1 << EIND_X));
@@ -129,116 +70,52 @@ ISR(TIMER1_OVF_vect)
     // Als het wiel de endswitch indrukt dan draait de motor de andere kant op
     if(stop_2x)
     {
-        PORTH &= ~(1 << PH6);       // rechtsom vanaf voorkant, naar voren
-        PORTH |= (1 << PH3);        // linksom vanaf voorkant, naar achteren
+        PORTH &= ~(1 << PH6);        // rechtsom vanaf voorkant, naar achteren
+        _delay_ms(10);
+        PORTH |= (1 << PH3);       // linksom vanaf voorkant, naar voren
     }
     else if(stop_x)
     {
-        PORTH &= ~(1 << PH3);       // rechtsom vanaf voorkant, naar voren
-        PORTH |= (1 << PH6);        // linksom vanaf voorkant, naar achteren
+        PORTH &= ~(1 << PH3);       // linksom vanaf voorkant, naar achteren
+        _delay_ms(10);
+        PORTH |= (1 << PH6);       // rechtsom vanaf voorkant, naar voren
     }
-    if(stop_2z)
+    else if(stop_2z)
     {
         PORTG &= ~(1 << PG5);       // rechtsom, dus naar rechts
+        _delay_ms(10);
         PORTE |= (1 << PE3);        // linksom, dus naar rechts
     }
     else if(stop_z)
     {
         PORTE &= ~(1 << PE3);       // linksom, dus naar rechts
+        _delay_ms(10);
         PORTG |= (1 << PG5);        // rechtsom, dus naar rechts
     }
 }
 
-uint16_t ticks_x = 0;
-volatile int echo_last = 0;
-volatile int echo = 0;
-volatile int send = 0;
-volatile int flag = 0;
-volatile int echo_current = 0;
-uint16_t ticks_z_y_magneet = 0;
-volatile int echo_last_z = 0;
-volatile int echo_z = 0;
-volatile int send_z = 0;
-volatile int flag_z = 0;
-volatile int echo_current_z = 0;
-
-ISR(INT0_vect)
+volatile int teller = 0;
+volatile int i = 0;
+// Interrupt voor noodstop
+ISR(TIMER1_OVF_vect)
 {
-    //x-as
-    echo_current = ECHO_HOOG_x_z;
-    if( echo_current != echo_last )               // signaal verstuurd
+    int noodstop = !(PINK &(1 << NOODSTOP));
+    if(noodstop && i == 0)
     {
-        if( echo_current && !echo)
-        {
-            // begin met tellen
-            TCNT1 = 0;
-            echo = 1;
-        }
-        else if(!echo_current && echo)          // signaal ontvangen
-        {
-            //stop met tellen (aflezen)
-            ticks_x = TCNT1;
-            flag = 1;
-        }
-        echo_last = echo_current;
+        i = 1;
+        // elektromagneet aan
+        PORTE |= (1 << ELEKTROMAGNEET);
+        // alle motoren uit
+        PORTH &= ~(1 << PH6);
+        PORTH &= ~(1 << PH3);
+        PORTH &= ~(1 << PH5);
+        PORTH &= ~(1 << PH4);
+        PORTE &= ~(1 << PE3);
+        PORTG &= ~(1 << PG5);
     }
-
-    // z-as
-    echo_current_z = ECHO_HOOG_x_z;
-    if( echo_current_z != echo_last_z )               // signaal verstuurd
+    else if( (PINK &(1 << NOODSTOP)) )
     {
-        if( echo_current_z && !echo_z)
-        {
-            // begin met tellen
-            TCNT1 = 0;
-            echo_z = 1;
-        }
-        else if(!echo_current_z && echo_z)          // signaal ontvangen
-        {
-            //stop met tellen (aflezen)
-            ticks_z_y_magneet = TCNT1;
-            flag_z = 1;
-        }
-        echo_last_z = echo_current_z;
-    }
-}
-
-void check_echosensor_x()
-{
-    if(send)
-    {
-        return;
-    }
-    else
-    {
-        TRIG_LAAG_x;
-        _delay_us(2);
-        TRIG_HOOG_x;
-        _delay_us(10);
-        TRIG_LAAG_x;
-        _delay_us(1000);
-
-        send = 1;
-    }
-}
-
-void check_echosensor_z()
-{
-    if(send)
-    {
-        return;
-    }
-    else
-    {
-        TRIG_LAAG_z;
-        _delay_us(2);
-        TRIG_HOOG_z;
-        _delay_us(10);
-        TRIG_LAAG_z;
-        _delay_us(1000);
-
-
-        send = 1;
+        i = 0;
     }
 }
 
@@ -246,7 +123,7 @@ void check_echosensor_z()
 int main(void)
 {
     initTimer0();
-    init_sensor();
+    initTimer1();
     sei();
 
     // Initialisatie
@@ -255,13 +132,24 @@ int main(void)
     DDRF &= ~(1 << EIND_2Z);
     DDRF &= ~(1 << EIND_X);
     DDRF &= ~(1 << EIND_2X);
+    DDRF &= ~(1 << EIND_Y);
+    DDRF &= ~(1 << EIND_2Y);
+
+    // IR sensoren
+    DDRF &= ~(1 << IRSENSOR1);
+    DDRK &= ~(1 << IRSENSOR2);
+    DDRK &= ~(1 << IRSENSOR3);
+    DDRK &= ~(1 << IRSENSOR4);
+    DDRK &= ~(1 << IRSENSOR5);
+    DDRK &= ~(1 << IRSENSOR6);
+    DDRK &= ~(1 << IRSENSOR7);
+    DDRK &= ~(1 << IRSENSOR8);
 
     // Knoppen
-    DDRF &= ~(1 << KNOP);
-    DDRF &= ~(1 << KNOP2);
+    DDRF &= ~(1 << STARTKNOP);
 
     // Noodstop
-    DDRF &= ~(1 << NOODSTOP);
+    DDRK &= ~(1 << NOODSTOP);
 
     // Motoren
     // X-as (langzame motor)
@@ -272,7 +160,7 @@ int main(void)
     // Y-as (snelle motor)
     DDRH |= (1 << PH5);
     DDRH |= (1 << PH4);
-    PORTH &= ~(1 << PH5);       // Omlaag
+    PORTH &= ~(1 << PH5);        // Omlaag
     PORTH &= ~(1 << PH4);       // Omhoog
     // Z-as (langzame motor)
     DDRE |= (1 << PE3);
@@ -282,146 +170,153 @@ int main(void)
 
     // Elektromagneet
     DDRE |= (1 << ELEKTROMAGNEET);
-    PORTE &= ~(1 << ELEKTROMAGNEET);
 
-    float duration_x = 0;                   //travel time
-    float duration_z_y_magneet = 0;         //travel time
-    float distance_x = 0;
-    float distance_z_y_magneet = 0;
-    int loop_uit = 0;
-
+    int a = 0;
     while(1)
     {
-        /// Container oppakken
-        //Motor x-as aan
-        PORTH |= (1 << PH6);        // rechtsom, dus naar voren (vanaf de voorkant gezien)
+//        int stop_x = !(PINF &(1 << EIND_X));
+//        int startknop = !(PINF &(1 << STARTKNOP));
+//        if(startknop && a == 0)
+//        {
+            a = 1;
+            /// Start positie
 
-        // Blijft pulsen verzenden totdat de afstand goed is
-        while (loop_uit == 0)
-        {
-            check_echosensor_x();
-            if(flag == 1)
+            /// Container oppakken
+            //Motor x-as aan
+            PORTH |= (1 << PH6);        // rechtsom, dus naar achteren (vanaf de voorkant gezien)
+
+            while(1)
             {
-                // convert ticks to seconds
-                duration_x = ticks_x / 16 ;
-                // convert seconds to cm sound speed = 340 m/s
-                distance_x = duration_x / 58.0 ;
-
-                if(distance_x >= 5 && distance_x <= 8)
+                int irsensor1_x = !(PINF &(1 << IRSENSOR1));
+                int irsensor2_x = !(PINK &(1 << IRSENSOR2));
+                int irsensor3_x = !(PINK &(1 << IRSENSOR3));
+                int irsensor4_x = !(PINK &(1 << IRSENSOR4));
+                if(irsensor2_x)
                 {
                     // Motor X-as uit
                     PORTH &= ~(1 << PH6);
-                    PORTH &= ~(1 << PH3);
-                    flag = 0;
-                    loop_uit = 1;
+                    break;
                 }
             }
-        }
 
-        // Motor z-as aan
-        PORTG |= (1 << PG5);        // rechtsom, dus naar rechts (vanaf de voorkant gezien)
+            // Motor z-as aan
+            PORTG |= (1 << PG5);        // rechtsom, dus naar rechts (vanaf de voorkant gezien)
 
-        // Blijft pulsen verzenden totdat de afstand goed is
-        while (loop_uit == 1)
-        {
-            check_echosensor_z();
-            if(flag == 1)
+            while(1)
             {
-                // convert ticks to seconds
-                duration_z_y_magneet = ticks_z_y_magneet / 16 ;
-                // convert seconds to cm sound speed = 340 m/s
-                distance_z_y_magneet = duration_z_y_magneet / 58.0 ;
+                int irsensor1_z = !(PINK &(1 << IRSENSOR5));
+                int irsensor2_z = !(PINK &(1 << IRSENSOR6));
+                int irsensor3_z = !(PINK &(1 << IRSENSOR7));
+                int irsensor4_z = !(PINK &(1 << IRSENSOR8));
 
-                if(distance_z_y_magneet >= 9 && distance_z_y_magneet <= 12)
+                if(irsensor1_z)
                 {
                     // Motor z-as uit
                     PORTE &= ~(1 << PE3);
                     PORTG &= ~(1 << PG5);
                     // Motor y-as aan, omlaag
                     PORTH |= (1 << PH5);
-                    // Delay ... ms, motor y-as uit
-                    _delay_ms(2500);
-                    PORTH &= ~(1 << PH5);
-                    // Elektromagneet aan
-                    PORTE |= (1 << ELEKTROMAGNEET);
-                    // Motor y-as aan, omhoog
-                    PORTH |= (1 << PH4);
-                    // Delay ... ms, motor y-as uit
-                    _delay_ms(2500);
-                    PORTH &= ~(1 << PH4);
-                    // uit de while
-                    loop_uit = 2;
+                    while(1)
+                    {
+                        int stop_2y = !(PINF &(1 << EIND_2Y));
+                        // Als de end switch wordt ingedrukt, dan motor y-as uit
+                        if(stop_2y)
+                        {
+                            PORTH &= ~(1 << PH5);
+                            // Elektromagneet aan
+                            PORTE |= (1 << ELEKTROMAGNEET);
+                            // Motor y-as aan, omhoog
+                            PORTH |= (1 << PH4);
+                            while(1)
+                            {
+                                int stop_y = !(PINF &(1 << EIND_Y));
+                                // Als de end switch wordt ingedrukt, dan motor y-as uit
+                                if(stop_y)
+                                {
+                                    PORTH &= ~(1 << PH4);
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    break;
                 }
+//                break;
             }
-        }
 
-        /// Container ergens neerzetten
-        //Motor x-as aan
-        PORTH |= (1 << PH3);            // linksom, dus naar achteren (vanaf de voorkant gezien)
 
-        while(loop_uit == 2)
-        {
-            check_echosensor_x();
-            if(flag == 1)
+
+
+
+            /// Container ergens neerzetten
+            // Motor x-as aan
+            PORTH |= (1 << PH3);            // linksom, dus naar achteren (vanaf de voorkant gezien)
+
+            while(1)
             {
-                // convert ticks to seconds
-                duration_x = ticks_x / 16 ;
-                // convert seconds to cm
-                distance_x = duration_x / 58.0 ;
-
-                if(distance_x >= 25 && distance_x <= 28)
+                int irsensor1_x = !(PINF &(1 << IRSENSOR1));
+                int irsensor2_x = !(PINK &(1 << IRSENSOR2));
+                int irsensor3_x = !(PINK &(1 << IRSENSOR3));
+                int irsensor4_x = !(PINK &(1 << IRSENSOR4));
+                if(!irsensor4_x)
                 {
-                    // Motor X-as uit
+                    //Motor X-as uit
                     PORTH &= ~(1 << PH3);
-                    loop_uit = 3;
+                    break;
                 }
             }
-        }
 
+            // Motor z-as aan
+            PORTE |= (1 << PE3);        // linksom, dus naar links (vanaf de voorkant gezien)
 
-        // Motor z-as aan
-        PORTE |= (1 << PE3);        // linksom, dus naar links (vanaf de voorkant gezien)
-
-        while(loop_uit == 3)
-        {
-            check_echosensor_z();
-            if(flag == 1)
+            while(1)
             {
-                // convert ticks to seconds
-                duration_x = ticks_x / 16 ;
-                // convert seconds to cm
-                distance_x = duration_x / 58.0 ;
-
-                if(distance_z_y_magneet >= 17 && distance_z_y_magneet <= 20)
+                int irsensor1_z = !(PINK &(1 << IRSENSOR5));
+                int irsensor2_z = !(PINK &(1 << IRSENSOR6));
+                int irsensor3_z = !(PINK &(1 << IRSENSOR7));
+                int irsensor4_z = !(PINK &(1 << IRSENSOR8));
+                if(!irsensor4_z)
                 {
                     // Motor z-as uit
                     PORTE &= ~(1 << PE3);
                     PORTG &= ~(1 << PG5);
                     // Motor y-as aan, omlaag
                     PORTH |= (1 << PH5);
-                    // Delay ... ms, motor y-as uit
-                    _delay_ms(2500);
-                    PORTH &= ~(1 << PH5);
-                    // Elektromagneet aan
-                    PORTE |= (1 << ELEKTROMAGNEET);
-                    // Motor y-as aan, omhoog
-                    PORTH |= (1 << PH4);
-                    // Delay ... ms, motor y-as uit
-                    _delay_ms(2500);
-                    PORTH &= ~(1 << PH4);
-                    //while uit
-                    loop_uit = 0;
+                    while(1)
+                    {
+                        int stop_2y = !(PINF &(1 << EIND_2Y));
+                        // Als de end switch wordt ingedrukt, dan motor y-as uit
+                        if(stop_2y)
+                        {
+                            PORTH &= ~(1 << PH5);
+                            // Elektromagneet aan
+                            PORTE &= ~(1 << ELEKTROMAGNEET);
+                            // Motor y-as aan, omhoog
+                            PORTH |= (1 << PH4);
+                            while(1)
+                            {
+                                int stop_y = !(PINF &(1 << EIND_Y));
+                                // Als de end switch wordt ingedrukt, dan motor y-as uit
+                                if(stop_y)
+                                {
+                                    PORTH &= ~(1 << PH4);
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    break;
                 }
             }
-        }
-
+//        }
+//        else if( (PINF &(1 << STARTKNOP)) )
+//        {
+//            a = 0;
+//        }
     }
+
 
     return 0;
 }
-
-
-
-/// Medemogelijk gemaakt door: Cas Brugman (basis code van afstandssensor (HC-SR04) gemaakt)
-
-
